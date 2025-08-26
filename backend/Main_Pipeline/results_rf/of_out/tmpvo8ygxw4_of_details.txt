@@ -1,0 +1,10 @@
+Input:/var/folders/gw/_2ptqm3s1tb3b880c6r6yc_m0000gn/T/tmpvo8ygxw4.mp4
+Input full path:/var/folders/gw/_2ptqm3s1tb3b880c6r6yc_m0000gn/T/tmpvo8ygxw4.mp4
+Camera parameters:875,875,640,360
+Output csv:tmpvo8ygxw4.csv
+Gaze: 0
+AUs: 1
+Landmarks 2D: 0
+Landmarks 3D: 0
+Pose: 0
+Shape parameters: 0
