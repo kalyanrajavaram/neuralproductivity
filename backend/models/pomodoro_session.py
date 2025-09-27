@@ -1,5 +1,5 @@
-from datetime import datetime
-from extensions import db
+# models.py
+from sqlalchemy.dialects.postgresql import JSONB  # if not on Postgres, use db.JSON
 
 class PomodoroSession(db.Model):
     __tablename__ = "pomodoro_sessions"
@@ -10,18 +10,25 @@ class PomodoroSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
-    # Prefer datetimes over strings
+    # Timestamps / duration
     started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     ended_at = db.Column(db.DateTime, nullable=True)
-    timezone = db.Column(db.String(64), nullable=True)   # e.g., 'America/Los_Angeles'
+    timezone = db.Column(db.String(64), nullable=True)
     total_duration_sec = db.Column(db.Integer, nullable=True)
 
     # UX metadata
     task = db.Column(db.String(100), nullable=False)
     task_category = db.Column(db.String(50), nullable=True)
-    focus_score = db.Column(db.Float, nullable=True)   # optional roll-up across chunks
+    focus_score = db.Column(db.Float, nullable=True)   # roll-up from summary.mean_focus_score
     user_rating = db.Column(db.Integer, nullable=True)
     achievements = db.Column(db.String(200), nullable=True)
+
+    # NEW: persisted analysis payload
+    summary_json  = db.Column(JSONB)   # { mean_focus_score, pct_*, longest_focused_streak_s, ... }
+    segments_json = db.Column(JSONB)   # [ {start_s, end_s, duration_s, state, ...}, ... ]
+    series_1hz    = db.Column(JSONB)   # [0..1 scores]
+    csv_paths     = db.Column(JSONB)   # optional: {framewise, summary, segments}
+    video_path    = db.Column(db.String(512))  # optional: local path or URL
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -51,4 +58,11 @@ class PomodoroSession(db.Model):
             "focus_score": self.focus_score,
             "user_rating": self.user_rating,
             "achievements": self.achievements,
+
+            # NEW surface for frontend reuse
+            "summary": self.summary_json,
+            "segments": self.segments_json,
+            "series_1hz": self.series_1hz,
+            "csv_paths": self.csv_paths,
+            "video_path": self.video_path,
         }

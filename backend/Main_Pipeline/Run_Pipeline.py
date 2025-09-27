@@ -1,114 +1,79 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Run_Pipeline.py
-───────────────
-Entry-point for the complete video–engagement pipeline.
-
-Order:
-  1. Generate_Parquet.py  → AU features (.parquet)
-  2. Infer_Au.py          → AU inference  (.npz)
-  3. Analyze_Lstm.py      → Focus smoothing + CSVs
-
-Outputs are written to backend/Main_Pipeline/results_rf/
-"""
+# Run_Pipeline.py (replace the config block + main with this shape)
 
 import argparse
 import subprocess
 import sys
 from pathlib import Path
 
-# ────────────────────────── CONFIG ────────────────────────── #
-BASE_DIR   = Path(__file__).resolve().parent           # …/Main_Pipeline
-VENV_PY    = BASE_DIR.parent / "venv" / "bin" / "python"
-
-GENERATE_PARQUET = BASE_DIR / "Generate_Parquet.py"
-INFER_AU         = BASE_DIR / "Infer_Au.py"
-ANALYZE_LSTM     = BASE_DIR / "Analyze_Lstm.py"
-
-OUTPUT_DIR   = BASE_DIR / "results_rf"                 # one folder for all outputs
-PARQUET_PATH = OUTPUT_DIR / "lstm_input.parquet"
-NPZ_PATH     = OUTPUT_DIR / "lstm_input.npz"
-
-OPENFACE_BIN = "/Users/kalyanrajavaram/Downloads/OpenFace/build/bin/FeatureExtraction"
-
-
-
-SCALER_PATH  = BASE_DIR / "scaler_s3_AU.joblib"
-MODEL_PATH   = BASE_DIR / "model_xgb_2.joblib"
-# ──────────────────────────────────────────────────────────── #
-
 def die(msg: str, code: int = 1):
-    print(f"❌ {msg}")
+    print(f"❌ {msg}", file=sys.stderr)
     sys.exit(code)
 
+def run(cmd: list[str], step_name: str, check_stdout=False):
+    """Run a subprocess; if check_stdout True, return CompletedProcess."""
+    print(f"{step_name}", file=sys.stderr)
+    return subprocess.run(cmd, text=True, capture_output=check_stdout, check=not check_stdout)
 
-def run(cmd: list[str], step_name: str):
-    """Run a subprocess, abort on failure with a clear message."""
-    print(f"🔹 {step_name}")
-    result = subprocess.run(cmd, text=True)
-    if result.returncode != 0:
-        die(f"{step_name} failed (exit={result.returncode})")
+def run_pipeline(video: Path, out_dir: Path):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    venv_py = out_dir.parent.parent / "venv" / "bin" / "python"   # adjust if needed
 
+    generate_parquet = Path(__file__).parent / "Generate_Parquet.py"
+    infer_au         = Path(__file__).parent / "Infer_Au.py"
+    analyze_lstm     = Path(__file__).parent / "Analyze_Lstm.py"
 
-def run_pipeline(video: Path):
-    # Make sure output folder exists
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    openface_bin = "/Users/kalyanrajavaram/Downloads/OpenFace/build/bin/FeatureExtraction"
+    scaler_path  = Path(__file__).parent / "scaler_s3_AU.joblib"
+    model_path   = Path(__file__).parent / "model_xgb_2.joblib"
 
-    # 1. ───────────────────────── Generate AU parquet ───────────────────────── #
+    parquet_path = out_dir / "lstm_input.parquet"
+    npz_path     = out_dir / "lstm_input.npz"
+
+    # Clean old artifacts if they exist in this out_dir
+    for p in (parquet_path, npz_path):
+        try: p.unlink()
+        except FileNotFoundError: pass
+
+    # 1) Parquet
     run(
-        [
-            str(VENV_PY),
-            str(GENERATE_PARQUET),
-            "--openface", OPENFACE_BIN,
-            "--video",    str(video),
-            "--output",   str(PARQUET_PATH)
-        ],
+        [str(venv_py), str(generate_parquet),
+         "--openface", openface_bin, "--video", str(video), "--output", str(parquet_path)],
         "[1/3] Generating AU features → Parquet"
     )
-    if not PARQUET_PATH.exists():
-        die(f"Parquet not found after Step 1: {PARQUET_PATH}")
+    if not parquet_path.exists():
+        die(f"Parquet not found: {parquet_path}")
 
-    # 2. ─────────────────────────── Run AU inference ───────────────────────── #
+    # 2) AU inference → NPZ
     run(
-        [
-            str(VENV_PY),
-            str(INFER_AU),
-            "--parquet", str(PARQUET_PATH),
-            "--scaler",  str(SCALER_PATH),
-            "--model",   str(MODEL_PATH),
-            "--out_dir", str(OUTPUT_DIR)
-        ],
+        [str(venv_py), str(infer_au),
+         "--parquet", str(parquet_path), "--scaler", str(scaler_path),
+         "--model", str(model_path), "--out_dir", str(out_dir)],
         "[2/3] Running AU inference"
     )
-    if not NPZ_PATH.exists():
-        die(f"NPZ not found after Step 2: {NPZ_PATH}")
+    if not npz_path.exists():
+        die(f"NPZ not found: {npz_path}")
 
-    # 3. ─────────────────── LSTM-based focus smoothing ─────────────────────── #
-    run(
-        [
-            str(VENV_PY),
-            str(ANALYZE_LSTM),
-            "--npz",    str(NPZ_PATH),
-            "--video",  str(video),
-            "--out_dir", str(OUTPUT_DIR)
-        ],
-        "[3/3] Analyzing engagement (LSTM)"
+    # 3) Analyze (capture JSON and print ONLY JSON to stdout)
+    cp = subprocess.run(
+        [str(venv_py), str(analyze_lstm),
+         "--npz", str(npz_path), "--video", str(video), "--out_dir", str(out_dir)],
+        text=True, capture_output=True
     )
+    if cp.returncode != 0:
+        print(cp.stderr[-500:], file=sys.stderr)
+        die("Analyze_Lstm.py failed")
 
-    # ───────────────────────────── Summary ────────────────────────────── #
-    print("\n✅ Pipeline finished successfully")
-    print(f"   • Parquet  → {PARQUET_PATH}")
-    print(f"   • NPZ      → {NPZ_PATH}")
-    print(f"   • Results  → {OUTPUT_DIR}\n")
-
+    # IMPORTANT: emit ONLY the analyzer JSON to stdout
+    print(cp.stdout.strip())
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Run full AU + LSTM engagement pipeline")
+    ap.add_argument("--out_dir", required=True, help="Output directory (unique per run)")
     ap.add_argument("video", help="Absolute path to the input video file")
     args = ap.parse_args()
 
     video_path = Path(args.video).expanduser().resolve()
     if not video_path.exists():
         die(f"Video file not found: {video_path}")
-    run_pipeline(video_path)
+    out_dir = Path(args.out_dir).expanduser().resolve()
+    run_pipeline(video=video_path, out_dir=out_dir)
